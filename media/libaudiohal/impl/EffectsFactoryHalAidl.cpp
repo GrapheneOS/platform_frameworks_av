@@ -174,9 +174,6 @@ status_t EffectsFactoryHalAidl::createEffect(const effect_uuid_t* uuid, int32_t 
     if (uuid == nullptr || effect == nullptr) {
         return BAD_VALUE;
     }
-    if (sessionId == AUDIO_SESSION_DEVICE && ioId == AUDIO_IO_HANDLE_NONE) {
-        return INVALID_OPERATION;
-    }
     ALOGV("%s session %d ioId %d", __func__, sessionId, ioId);
 
     AudioUuid aidlUuid =
