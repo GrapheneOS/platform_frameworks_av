@@ -3515,12 +3515,12 @@ NO_THREAD_SAFETY_ANALYSIS
                                       const_cast<effect_descriptor_t *>(&mDescriptor),
                                       mMyCallback->newEffectId(), AUDIO_SESSION_DEVICE,
                                       false /* pinned */, port->id);
+            mHalEffect->configure_l();
             if (audio_is_input_device(mDevice.mType)) {
                 mHalEffect->setInputDevice(mDevice);
             } else {
                 mHalEffect->setDevices({mDevice});
             }
-            mHalEffect->configure_l();
         }
         *handle = new EffectHandle(mHalEffect, nullptr, nullptr, 0 /*priority*/,
                                    mNotifyFramesProcessed);

@@ -796,7 +796,10 @@ private:
         audio_channel_mask_t outChannelMask() const override;
         uint32_t outChannelCount() const override;
         audio_channel_mask_t hapticChannelMask() const override { return AUDIO_CHANNEL_NONE; }
-        size_t frameCount() const override  { return 0; }
+        /**
+         * frameCount cannot be zero.
+         */
+        size_t frameCount() const override  { return 1; }
         uint32_t latency() const override  { return 0; }
 
         status_t addEffectToHal(const sp<EffectHalInterface>& effect) override;
