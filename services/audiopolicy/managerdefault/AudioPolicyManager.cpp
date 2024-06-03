@@ -3084,43 +3084,115 @@ audio_io_handle_t AudioPolicyManager::getInputForDevice(const sp<DeviceDescripto
         }
     }
 
+    bool isPreemptor = false;
     if (!profile->canOpenNewIo()) {
-        for (size_t i = 0; i < mInputs.size(); ) {
-            sp<AudioInputDescriptor> desc = mInputs.valueAt(i);
-            if (desc->mProfile != profile) {
-                i++;
-                continue;
-            }
-            // if sound trigger, reuse input if used by other sound trigger on same session
-            // else
-            //    reuse input if active client app is not in IDLE state
-            //
-            RecordClientVector clients = desc->clientsList();
-            bool doClose = false;
-            for (const auto& client : clients) {
-                if (isSoundTrigger != client->isSoundTrigger()) {
+        if (com::android::media::audioserver::fix_input_sharing_logic()) {
+            //  First pick best candidate for preemption (there may not be any):
+            //  - Preempt and input if:
+            //     - It has only strictly lower priority use cases than the new client
+            //     - It has equal priority use cases than the new client, was not
+            //     opened thanks to preemption or has been active since opened.
+            //  - Order the preemption candidates by inactive first and priority second
+            sp<AudioInputDescriptor> closeCandidate;
+            int leastCloseRank = INT_MAX;
+            static const int sCloseActive = 0x100;
+
+            for (size_t i = 0; i < mInputs.size(); i++) {
+                sp<AudioInputDescriptor> desc = mInputs.valueAt(i);
+                if (desc->mProfile != profile) {
                     continue;
                 }
-                if (client->isSoundTrigger()) {
-                    if (session == client->session()) {
+                sp<RecordClientDescriptor> topPrioClient = desc->getHighestPriorityClient();
+                if (topPrioClient == nullptr) {
+                    continue;
+                }
+                int topPrio = source_priority(topPrioClient->source());
+                if (topPrio < source_priority(attributes.source)
+                      || (topPrio == source_priority(attributes.source)
+                          && !desc->isPreemptor())) {
+                    int closeRank = (desc->isActive() ? sCloseActive : 0) + topPrio;
+                    if (closeRank < leastCloseRank) {
+                        leastCloseRank = closeRank;
+                        closeCandidate = desc;
+                    }
+                }
+            }
+
+            if (closeCandidate != nullptr) {
+                closeInput(closeCandidate->mIoHandle);
+                // Mark the new input as being issued from a preemption
+                // so that is will not be preempted later
+                isPreemptor = true;
+            } else {
+                // Then pick the best reusable input (There is always one)
+                // The order of preference is:
+                // 1) active inputs with same use case as the new client
+                // 2) inactive inputs with same use case
+                // 3) active inputs with different use cases
+                // 4) inactive inputs with different use cases
+                sp<AudioInputDescriptor> reuseCandidate;
+                int leastReuseRank = INT_MAX;
+                static const int sReuseDifferentUseCase = 0x100;
+
+                for (size_t i = 0; i < mInputs.size(); i++) {
+                    sp<AudioInputDescriptor> desc = mInputs.valueAt(i);
+                    if (desc->mProfile != profile) {
+                        continue;
+                    }
+                    int reuseRank = sReuseDifferentUseCase;
+                    for (const auto& client: desc->getClientIterable()) {
+                        if (client->source() == attributes.source) {
+                            reuseRank = 0;
+                            break;
+                        }
+                    }
+                    reuseRank += desc->isActive() ? 0 : 1;
+                    if (reuseRank < leastReuseRank) {
+                        leastReuseRank = reuseRank;
+                        reuseCandidate = desc;
+                    }
+                }
+                return reuseCandidate->mIoHandle;
+            }
+        } else { // fix_input_sharing_logic()
+            for (size_t i = 0; i < mInputs.size(); ) {
+                 sp<AudioInputDescriptor> desc = mInputs.valueAt(i);
+                 if (desc->mProfile != profile) {
+                     i++;
+                     continue;
+                 }
+                // if sound trigger, reuse input if used by other sound trigger on same session
+                // else
+                //    reuse input if active client app is not in IDLE state
+                //
+                RecordClientVector clients = desc->clientsList();
+                bool doClose = false;
+                for (const auto& client : clients) {
+                    if (isSoundTrigger != client->isSoundTrigger()) {
+                        continue;
+                    }
+                    if (client->isSoundTrigger()) {
+                        if (session == client->session()) {
+                            return desc->mIoHandle;
+                        }
+                        continue;
+                    }
+                    if (client->active() && client->appState() != APP_STATE_IDLE) {
                         return desc->mIoHandle;
                     }
-                    continue;
+                    doClose = true;
                 }
-                if (client->active() && client->appState() != APP_STATE_IDLE) {
-                    return desc->mIoHandle;
+                if (doClose) {
+                    closeInput(desc->mIoHandle);
+                } else {
+                    i++;
                 }
-                doClose = true;
-            }
-            if (doClose) {
-                closeInput(desc->mIoHandle);
-            } else {
-                i++;
             }
         }
     }
 
-    sp<AudioInputDescriptor> inputDesc = new AudioInputDescriptor(profile, mpClientInterface);
+    sp<AudioInputDescriptor> inputDesc = new AudioInputDescriptor(
+            profile, mpClientInterface, isPreemptor);
 
     audio_config_t lConfig = AUDIO_CONFIG_INITIALIZER;
     lConfig.sample_rate = profileSamplingRate;
@@ -6636,8 +6708,8 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
                     __func__, inProfile->getTagName().c_str());
                 continue;
             }
-            sp<AudioInputDescriptor> inputDesc =
-                    new AudioInputDescriptor(inProfile, mpClientInterface);
+            sp<AudioInputDescriptor> inputDesc = new AudioInputDescriptor(
+                    inProfile, mpClientInterface, false /*isPreemptor*/);
 
             audio_io_handle_t input = AUDIO_IO_HANDLE_NONE;
             status_t status = inputDesc->open(nullptr,
@@ -6947,7 +7019,7 @@ status_t AudioPolicyManager::checkInputsForDevice(const sp<DeviceDescriptor>& de
                 continue;
             }
 
-            desc = new AudioInputDescriptor(profile, mpClientInterface);
+            desc = new AudioInputDescriptor(profile, mpClientInterface, false  /*isPreemptor*/);
             audio_io_handle_t input = AUDIO_IO_HANDLE_NONE;
             status = desc->open(nullptr, device, AUDIO_SOURCE_MIC, AUDIO_INPUT_FLAG_NONE, &input);
 

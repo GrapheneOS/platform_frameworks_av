@@ -3830,3 +3830,92 @@ INSTANTIATE_TEST_CASE_P(
         testing::Values(AUDIO_USAGE_NOTIFICATION_TELEPHONY_RINGTONE,
                         AUDIO_USAGE_ALARM)
 );
+
+class AudioPolicyManagerInputPreemptionTest : public AudioPolicyManagerTestWithConfigurationFile {
+};
+
+TEST_F_WITH_FLAGS(
+        AudioPolicyManagerInputPreemptionTest,
+        SameSessionReusesInput,
+        REQUIRES_FLAGS_ENABLED(
+                ACONFIG_FLAG(com::android::media::audioserver, fix_input_sharing_logic))
+) {
+    mClient->resetInputApiCallsCounters();
+
+    audio_attributes_t attr = AUDIO_ATTRIBUTES_INITIALIZER;
+    attr.source = AUDIO_SOURCE_MIC;
+    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
+    audio_io_handle_t input1 = AUDIO_PORT_HANDLE_NONE;
+    ASSERT_NO_FATAL_FAILURE(getInputForAttr(attr, &input1, TEST_SESSION_ID, 1, &selectedDeviceId,
+                                            AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_STEREO,
+                                            48000));
+
+    EXPECT_EQ(1, mClient->getOpenInputCallsCount());
+
+    audio_io_handle_t input2 = AUDIO_PORT_HANDLE_NONE;
+    ASSERT_NO_FATAL_FAILURE(getInputForAttr(attr, &input2, TEST_SESSION_ID, 1, &selectedDeviceId,
+                                        AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_STEREO,
+                                        48000));
+
+    EXPECT_EQ(1, mClient->getOpenInputCallsCount());
+    EXPECT_EQ(0, mClient->getCloseInputCallsCount());
+    EXPECT_EQ(input1, input2);
+}
+
+TEST_F_WITH_FLAGS(
+        AudioPolicyManagerInputPreemptionTest,
+        LesserPriorityReusesInput,
+        REQUIRES_FLAGS_ENABLED(
+                ACONFIG_FLAG(com::android::media::audioserver, fix_input_sharing_logic))
+) {
+    mClient->resetInputApiCallsCounters();
+
+    audio_attributes_t attr = AUDIO_ATTRIBUTES_INITIALIZER;
+    attr.source = AUDIO_SOURCE_MIC;
+    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
+    audio_io_handle_t input1 = AUDIO_PORT_HANDLE_NONE;
+    ASSERT_NO_FATAL_FAILURE(getInputForAttr(attr, &input1, TEST_SESSION_ID, 1, &selectedDeviceId,
+                                            AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_STEREO,
+                                            48000));
+
+    EXPECT_EQ(1, mClient->getOpenInputCallsCount());
+
+    audio_io_handle_t input2 = AUDIO_PORT_HANDLE_NONE;
+    attr.source = AUDIO_SOURCE_VOICE_RECOGNITION;
+    ASSERT_NO_FATAL_FAILURE(getInputForAttr(attr, &input2, OTHER_SESSION_ID, 1, &selectedDeviceId,
+                                        AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_STEREO,
+                                        48000));
+
+    EXPECT_EQ(1, mClient->getOpenInputCallsCount());
+    EXPECT_EQ(0, mClient->getCloseInputCallsCount());
+    EXPECT_EQ(input1, input2);
+}
+
+TEST_F_WITH_FLAGS(
+        AudioPolicyManagerInputPreemptionTest,
+        HigherPriorityPreemptsInput,
+        REQUIRES_FLAGS_ENABLED(
+                ACONFIG_FLAG(com::android::media::audioserver, fix_input_sharing_logic))
+) {
+    mClient->resetInputApiCallsCounters();
+
+    audio_attributes_t attr = AUDIO_ATTRIBUTES_INITIALIZER;
+    attr.source = AUDIO_SOURCE_MIC;
+    audio_port_handle_t selectedDeviceId = AUDIO_PORT_HANDLE_NONE;
+    audio_io_handle_t input1 = AUDIO_PORT_HANDLE_NONE;
+    ASSERT_NO_FATAL_FAILURE(getInputForAttr(attr, &input1, TEST_SESSION_ID, 1, &selectedDeviceId,
+                                            AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_STEREO,
+                                            48000));
+
+    EXPECT_EQ(1, mClient->getOpenInputCallsCount());
+
+    audio_io_handle_t input2 = AUDIO_PORT_HANDLE_NONE;
+    attr.source = AUDIO_SOURCE_CAMCORDER;
+    ASSERT_NO_FATAL_FAILURE(getInputForAttr(attr, &input2, OTHER_SESSION_ID, 1, &selectedDeviceId,
+                                        AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_IN_STEREO,
+                                        48000));
+
+    EXPECT_EQ(2, mClient->getOpenInputCallsCount());
+    EXPECT_EQ(1, mClient->getCloseInputCallsCount());
+    EXPECT_NE(input1, input2);
+}
