@@ -3586,7 +3586,9 @@ status_t AudioPolicyManager::setVolumeIndexForAttributes(const audio_attributes_
         if (isVolumeConsistentForCalls(vs, {mCallRxSourceClient->sinkDevice()->type()},
                 isVoiceVolSrc, isBtScoVolSrc, __func__)
                 && (isVoiceVolSrc || isBtScoVolSrc)) {
-            setVoiceVolume(index, curves, isVoiceVolSrc, 0);
+            bool voiceVolumeManagedByHost = isVoiceVolSrc &&
+                    !audio_is_ble_out_device(mCallRxSourceClient->sinkDevice()->type());
+            setVoiceVolume(index, curves, voiceVolumeManagedByHost, 0);
         }
     }
 
@@ -8269,9 +8271,10 @@ status_t AudioPolicyManager::checkAndSetVolume(IVolumeCurves &curves,
 
     float volumeDb = computeVolume(curves, volumeSource, index, deviceTypes);
     if (outputDesc->isFixedVolume(deviceTypes) ||
-            // Force VoIP volume to max for bluetooth SCO device except if muted
+            // Force VoIP volume to max for bluetooth SCO/BLE device except if muted
             (index != 0 && (isVoiceVolSrc || isBtScoVolSrc) &&
-                    isSingleDeviceType(deviceTypes, audio_is_bluetooth_out_sco_device))) {
+                    (isSingleDeviceType(deviceTypes, audio_is_bluetooth_out_sco_device)
+                    || isSingleDeviceType(deviceTypes, audio_is_ble_out_device)))) {
         volumeDb = 0.0f;
     }
     const bool muted = (index == 0) && (volumeDb != 0.0f);
@@ -8279,17 +8282,19 @@ status_t AudioPolicyManager::checkAndSetVolume(IVolumeCurves &curves,
             deviceTypes, delayMs, force, isVoiceVolSrc);
 
     if (outputDesc == mPrimaryOutput && (isVoiceVolSrc || isBtScoVolSrc)) {
-        setVoiceVolume(index, curves, isVoiceVolSrc, delayMs);
+        bool voiceVolumeManagedByHost = isVoiceVolSrc &&
+                !isSingleDeviceType(deviceTypes, audio_is_ble_out_device);
+        setVoiceVolume(index, curves, voiceVolumeManagedByHost, delayMs);
     }
     return NO_ERROR;
 }
 
 void AudioPolicyManager::setVoiceVolume(
-        int index, IVolumeCurves &curves, bool isVoiceVolSrc, int delayMs) {
+        int index, IVolumeCurves &curves, bool voiceVolumeManagedByHost, int delayMs) {
     float voiceVolume;
-    // Force voice volume to max or mute for Bluetooth SCO as other attenuations are managed
+    // Force voice volume to max or mute for Bluetooth SCO/BLE as other attenuations are managed
     // by the headset
-    if (isVoiceVolSrc) {
+    if (voiceVolumeManagedByHost) {
         voiceVolume = (float)index/(float)curves.getVolumeIndexMax();
     } else {
         voiceVolume = index == 0 ? 0.0 : 1.0;
