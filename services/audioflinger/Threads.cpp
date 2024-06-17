@@ -8667,6 +8667,9 @@ reacquire_wakelock:
 
         // loop over each active track
         for (size_t i = 0; i < size; i++) {
+            if (activeTrack) {  // ensure track release is outside lock.
+                oldActiveTracks.emplace_back(std::move(activeTrack));
+            }
             activeTrack = activeTracks[i];
 
             // skip fast tracks, as those are handled directly by FastCapture
