@@ -4886,8 +4886,15 @@ void MPEG4Writer::Track::writeEdtsBox() {
             int32_t mediaTime = (mFirstSampleStartOffsetUs * mTimeScale + 5E5) / 1E6;
             int32_t firstSampleOffsetTicks =
                     (mFirstSampleStartOffsetUs * mvhdTimeScale + 5E5) / 1E6;
-            // samples before 0 don't count in for duration, hence subtract firstSampleOffsetTicks.
-            addOneElstTableEntry(tkhdDurationTicks - firstSampleOffsetTicks, mediaTime, 1, 0);
+            if (tkhdDurationTicks >= firstSampleOffsetTicks) {
+                // samples before 0 don't count in for duration, hence subtract
+                // firstSampleOffsetTicks.
+                addOneElstTableEntry(tkhdDurationTicks - firstSampleOffsetTicks, mediaTime, 1, 0);
+            } else {
+                ALOGW("The track header duration %" PRId64
+                      " is smaller than the first sample offset %" PRId64,
+                      mTrackDurationUs, mFirstSampleStartOffsetUs);
+            }
         } else {
             // Track starting at zero.
             ALOGV("No edit list entry required for this track");
