@@ -5905,7 +5905,8 @@ status_t AudioPolicyManager::getMasterMono(bool *mono)
 float AudioPolicyManager::getStreamVolumeDB(
         audio_stream_type_t stream, int index, audio_devices_t device)
 {
-    return computeVolume(getVolumeCurves(stream), toVolumeSource(stream), index, {device});
+    return computeVolume(getVolumeCurves(stream), toVolumeSource(stream), index,
+                         {device}, /* adjustAttenuation= */false);
 }
 
 status_t AudioPolicyManager::getSurroundFormats(unsigned int *numSurroundFormats,
@@ -8083,9 +8084,15 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
                                         VolumeSource volumeSource,
                                         int index,
                                         const DeviceTypeSet& deviceTypes,
+                                        bool adjustAttenuation,
                                         bool computeInternalInteraction)
 {
-    float volumeDb = adjustDeviceAttenuationForAbsVolume(curves, volumeSource, index, deviceTypes);
+    float volumeDb;
+    if (adjustAttenuation) {
+        volumeDb = adjustDeviceAttenuationForAbsVolume(curves, volumeSource, index, deviceTypes);
+    } else {
+        volumeDb = curves.volIndexToDb(Volume::getDeviceCategory(deviceTypes), index);
+    }
     ALOGV("%s volume source %d, index %d,  devices %s, compute internal %b ", __func__,
           volumeSource, index, dumpDeviceTypes(deviceTypes).c_str(), computeInternalInteraction);
 
@@ -8106,7 +8113,8 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
             mOutputs.isActive(ringVolumeSrc, 0)) {
         auto &ringCurves = getVolumeCurves(AUDIO_STREAM_RING);
         const float ringVolumeDb = computeVolume(ringCurves, ringVolumeSrc, index, deviceTypes,
-                /* computeInternalInteraction= */ false);
+                                                 adjustAttenuation,
+                                                 /* computeInternalInteraction= */false);
         return ringVolumeDb - 4 > volumeDb ? ringVolumeDb - 4 : volumeDb;
     }
 
@@ -8124,7 +8132,7 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
         int voiceVolumeIndex = voiceCurves.getVolumeIndex(deviceTypes);
         const float maxVoiceVolDb =
                 computeVolume(voiceCurves, callVolumeSrc, voiceVolumeIndex, deviceTypes,
-                              /* computeInternalInteraction= */ false)
+                        adjustAttenuation, /* computeInternalInteraction= */false)
                 + IN_CALL_EARPIECE_HEADROOM_DB;
         // FIXME: Workaround for call screening applications until a proper audio mode is defined
         // to support this scenario : Exempt the RING stream from the audio cap if the audio was
@@ -8177,7 +8185,8 @@ float AudioPolicyManager::computeVolume(IVolumeCurves &curves,
                                              musicVolumeSrc,
                                              musicCurves.getVolumeIndex(musicDevice),
                                              musicDevice,
-                                             /* computeInternalInteraction= */ false);
+                                              adjustAttenuation,
+                                              /* computeInternalInteraction= */ false);
             float minVolDb = (musicVolDb > SONIFICATION_HEADSET_VOLUME_MIN_DB) ?
                         musicVolDb : SONIFICATION_HEADSET_VOLUME_MIN_DB;
             if (volumeDb > minVolDb) {

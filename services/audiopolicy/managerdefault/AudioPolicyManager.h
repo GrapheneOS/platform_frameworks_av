@@ -590,6 +590,8 @@ protected:
          * @param index index to match in the volume curves for the calculation
          * @param deviceTypes devices that should be considered in the volume curves for the
          *        calculation
+         * @param adjustAttenuation boolean indicating whether we should adjust the value to
+         *        avoid double attenuation when controlling an avrcp device
          * @param computeInternalInteraction boolean indicating whether recursive volume computation
          *        should continue within the volume computation. Defaults to {@code true} so the
          *        volume interactions can be computed. Calls within the method should always set the
@@ -598,6 +600,7 @@ protected:
          */
         virtual float computeVolume(IVolumeCurves &curves, VolumeSource volumeSource,
                                int index, const DeviceTypeSet& deviceTypes,
+                               bool adjustAttenuation = true,
                                bool computeInternalInteraction = true);
 
         // rescale volume index from srcStream within range of dstStream
