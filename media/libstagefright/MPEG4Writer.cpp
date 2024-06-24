@@ -72,6 +72,9 @@ static const int64_t kInitialDelayTimeUs     = 700000LL;
 static const int64_t kMaxMetadataSize = 0x4000000LL;   // 64MB max per-frame metadata size
 static const int64_t kMaxCttsOffsetTimeUs = 30 * 60 * 1000000LL;  // 30 minutes
 static const size_t kESDSScratchBufferSize = 10;  // kMaxAtomSize in Mpeg4Extractor 64MB
+// Allow up to 100 milli second, which is safely above the maximum delay observed in manual testing
+// between posting from setNextFd and handling it
+static const int64_t kFdCondWaitTimeoutNs = 100000000;
 
 static const char kMetaKey_Version[]    = "com.android.version";
 static const char kMetaKey_Manufacturer[]      = "com.android.manufacturer";
@@ -1262,9 +1265,13 @@ status_t MPEG4Writer::switchFd() {
         return OK;
     }
 
+    // Wait for the signal only if the new file is not available.
     if (mNextFd == -1) {
-        ALOGW("No FileDescriptor for next recording");
-        return INVALID_OPERATION;
+        status_t res = mFdCond.waitRelative(mLock, kFdCondWaitTimeoutNs);
+        if (res != OK) {
+            ALOGW("No FileDescriptor for next recording");
+            return INVALID_OPERATION;
+        }
     }
 
     mSwitchPending = true;
@@ -2433,6 +2440,7 @@ status_t MPEG4Writer::setNextFd(int fd) {
         return INVALID_OPERATION;
     }
     mNextFd = dup(fd);
+    mFdCond.signal();
     return OK;
 }
 
