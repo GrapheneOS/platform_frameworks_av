@@ -3812,7 +3812,11 @@ audio_unique_id_t AudioFlinger::nextUniqueId(audio_unique_id_use_t use)
 
 IAfPlaybackThread* AudioFlinger::primaryPlaybackThread_l() const
 {
-    audio_utils::lock_guard lock(hardwareMutex());
+    // The atomic ptr mPrimaryHardwareDev requires both the
+    // AudioFlinger and the Hardware mutex for modification.
+    // As we hold the AudioFlinger mutex, we access it
+    // safely without the Hardware mutex, to avoid mutex order
+    // inversion with Thread methods and the ThreadBase mutex.
     if (mPrimaryHardwareDev == nullptr) {
         return nullptr;
     }
