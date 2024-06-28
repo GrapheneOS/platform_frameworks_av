@@ -8132,7 +8132,7 @@ float AudioPolicyManager::adjustDeviceAttenuationForAbsVolume(IVolumeCurves &cur
             VolumeSource vsToDriveAbs = toVolumeSource(groupToDriveAbs);
             if (vsToDriveAbs == volumeSource) {
                 // attenuation is applied by the abs volume controller
-                return volumeDbMax;
+                return (index != 0) ? volumeDbMax : volumeDb;
             } else {
                 IVolumeCurves &curvesAbs = getVolumeCurves(vsToDriveAbs);
                 int indexAbs = curvesAbs.getVolumeIndex({volumeDevice});
