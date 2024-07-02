@@ -31,6 +31,12 @@
 namespace android {
 namespace companion {
 namespace virtualcamera {
+namespace {
+
+// Maximal number of buffers producer can dequeue without blocking.
+constexpr int kBufferProducerMaxDequeueBufferCount = 64;
+
+}  // namespace
 
 EglSurfaceTexture::EglSurfaceTexture(const uint32_t width, const uint32_t height)
     : mWidth(width), mHeight(height) {
@@ -40,6 +46,10 @@ EglSurfaceTexture::EglSurfaceTexture(const uint32_t width, const uint32_t height
     return;
   }
   BufferQueue::createBufferQueue(&mBufferProducer, &mBufferConsumer);
+  // Set max dequeue buffer count for producer to maximal value to prevent
+  // blocking when dequeuing input buffers.
+  mBufferProducer->setMaxDequeuedBufferCount(
+      kBufferProducerMaxDequeueBufferCount);
   mGlConsumer = sp<GLConsumer>::make(
       mBufferConsumer, mTextureId, GLConsumer::TEXTURE_EXTERNAL, false, false);
   mGlConsumer->setName(String8("VirtualCameraEglSurfaceTexture"));
@@ -75,7 +85,26 @@ bool EglSurfaceTexture::waitForNextFrame(const std::chrono::nanoseconds timeout)
 }
 
 GLuint EglSurfaceTexture::updateTexture() {
-  mGlConsumer->updateTexImage();
+  int previousFrameId;
+  int framesAdvance = 0;
+  // Consume buffers one at the time.
+  // Contrary to the code comments in GLConsumer, the GLConsumer acquires
+  // next queued buffer (not the most recently queued buffer).
+  while (true) {
+    previousFrameId = mGlConsumer->getFrameNumber();
+    mGlConsumer->updateTexImage();
+    int currentFrameId = mGlConsumer->getFrameNumber();
+    if (previousFrameId == currentFrameId) {
+      // Frame number didn't change after updating the texture,
+      // this means we're at the end of the queue and current attached
+      // buffer is the most recent buffer.
+      break;
+    }
+
+    framesAdvance++;
+    previousFrameId = currentFrameId;
+  }
+  ALOGV("%s: Advanced %d frames", __func__, framesAdvance);
   return mTextureId;
 }
 
