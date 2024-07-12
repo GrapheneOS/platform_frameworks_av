@@ -1373,12 +1373,12 @@ status_t EffectModule::setVolume_l(uint32_t* left, uint32_t* right, bool control
             ((mDescriptor.flags & EFFECT_FLAG_VOLUME_MASK) == EFFECT_FLAG_VOLUME_CTRL ||
              (mDescriptor.flags & EFFECT_FLAG_VOLUME_MASK) == EFFECT_FLAG_VOLUME_IND ||
              (mDescriptor.flags & EFFECT_FLAG_VOLUME_MASK) == EFFECT_FLAG_VOLUME_MONITOR)) {
-        status = setVolumeInternal(left, right, controller);
+        status = setVolumeInternal_ll(left, right, controller);
     }
     return status;
 }
 
-status_t EffectModule::setVolumeInternal(
+status_t EffectModule::setVolumeInternal_ll(
         uint32_t *left, uint32_t *right, bool controller) {
     if (mVolume.has_value() && *left == mVolume.value()[0] && *right == mVolume.value()[1] &&
             !controller) {
