@@ -791,47 +791,6 @@ extern "C" void RegisterCodecServices() {
     }
 
     using namespace ::android::hardware::media::c2;
-
-    if (!ionPropertiesDefined()) {
-        using IComponentStore =
-            ::android::hardware::media::c2::V1_0::IComponentStore;
-        std::string const preferredStoreName = "default";
-        if (aidlSelected) {
-            std::shared_ptr<c2_aidl::IComponentStore> preferredStore;
-            if (__builtin_available(android __ANDROID_API_S__, *)) {
-                std::string instanceName = ::android::base::StringPrintf(
-                        "%s/%s", c2_aidl::IComponentStore::descriptor, preferredStoreName.c_str());
-                if (AServiceManager_isDeclared(instanceName.c_str())) {
-                    preferredStore = c2_aidl::IComponentStore::fromBinder(::ndk::SpAIBinder(
-                            AServiceManager_waitForService(instanceName.c_str())));
-                }
-            }
-            if (preferredStore) {
-                ::android::SetPreferredCodec2ComponentStore(
-                        std::make_shared<H2C2ComponentStore>(preferredStore));
-                LOG(INFO) <<
-                        "Preferred Codec2 AIDL store is set to \"" <<
-                        preferredStoreName << "\".";
-            } else {
-                LOG(INFO) <<
-                        "Preferred Codec2 AIDL store is defaulted to \"software\".";
-            }
-        } else {
-            sp<IComponentStore> preferredStore =
-                IComponentStore::getService(preferredStoreName.c_str());
-            if (preferredStore) {
-                ::android::SetPreferredCodec2ComponentStore(
-                        std::make_shared<H2C2ComponentStore>(preferredStore));
-                LOG(INFO) <<
-                        "Preferred Codec2 HIDL store is set to \"" <<
-                        preferredStoreName << "\".";
-            } else {
-                LOG(INFO) <<
-                        "Preferred Codec2 HIDL store is defaulted to \"software\".";
-            }
-        }
-    }
-
     bool registered = false;
     const std::string aidlServiceName =
         std::string(c2_aidl::IComponentStore::descriptor) + "/software";
@@ -875,6 +834,48 @@ extern "C" void RegisterCodecServices() {
     } else {
         LOG(INFO) << "The HIDL software Codec2 service is deprecated"
                      " so it is not being registered with hwservicemanager.";
+    }
+
+    // Preferred store must be set after the store is registered to ensure that
+    // the correct preferred store is set.
+    if (!ionPropertiesDefined()) {
+        using IComponentStore =
+            ::android::hardware::media::c2::V1_0::IComponentStore;
+        std::string const preferredStoreName = "default";
+        if (aidlSelected) {
+            std::shared_ptr<c2_aidl::IComponentStore> preferredStore;
+            if (__builtin_available(android __ANDROID_API_S__, *)) {
+                std::string instanceName = ::android::base::StringPrintf(
+                        "%s/%s", c2_aidl::IComponentStore::descriptor, preferredStoreName.c_str());
+                if (AServiceManager_isDeclared(instanceName.c_str())) {
+                    preferredStore = c2_aidl::IComponentStore::fromBinder(::ndk::SpAIBinder(
+                            AServiceManager_waitForService(instanceName.c_str())));
+                }
+            }
+            if (preferredStore) {
+                ::android::SetPreferredCodec2ComponentStore(
+                        std::make_shared<H2C2ComponentStore>(preferredStore));
+                LOG(INFO) <<
+                        "Preferred Codec2 AIDL store is set to \"" <<
+                        preferredStoreName << "\".";
+            } else {
+                LOG(INFO) <<
+                        "Preferred Codec2 AIDL store is defaulted to \"software\".";
+            }
+        } else {
+            sp<IComponentStore> preferredStore =
+                IComponentStore::getService(preferredStoreName.c_str());
+            if (preferredStore) {
+                ::android::SetPreferredCodec2ComponentStore(
+                        std::make_shared<H2C2ComponentStore>(preferredStore));
+                LOG(INFO) <<
+                        "Preferred Codec2 HIDL store is set to \"" <<
+                        preferredStoreName << "\".";
+            } else {
+                LOG(INFO) <<
+                        "Preferred Codec2 HIDL store is defaulted to \"software\".";
+            }
+        }
     }
 
     if (registered) {
