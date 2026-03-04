@@ -1015,9 +1015,9 @@ status_t MediaPlayerService::Client::setDataSource(
     if (url == NULL)
         return UNKNOWN_ERROR;
 
-    if ((strncmp(url, "http://", 7) == 0) ||
-        (strncmp(url, "https://", 8) == 0) ||
-        (strncmp(url, "rtsp://", 7) == 0)) {
+    if ((strncasecmp(url, "http://", 7) == 0) ||
+        (strncasecmp(url, "https://", 8) == 0) ||
+        (strncasecmp(url, "rtsp://", 7) == 0)) {
         if (!checkPermission("android.permission.INTERNET")) {
             return PERMISSION_DENIED;
         }
