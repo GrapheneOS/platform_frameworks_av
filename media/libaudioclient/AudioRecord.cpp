@@ -18,6 +18,7 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "AudioRecord"
 
+#include <algorithm>
 #include <inttypes.h>
 #include <android-base/macros.h>
 #include <android-base/stringprintf.h>
@@ -30,6 +31,8 @@
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
 #include <media/AudioRecord.h>
+#include <mic_spoofing.h>
+#include <mediautils/MicSpoofing.h>
 #include <utils/Log.h>
 #include <private/media/AudioTrackShared.h>
 #include <processgroup/sched_policy.h>
@@ -186,7 +189,12 @@ AudioRecord::~AudioRecord()
 
     stopAndJoinCallbacks(); // checks mStatus
 
-    if (mStatus == NO_ERROR) {
+    if (mSpoofedAudioSource != nullptr) {
+        mic_spoofing_destroy_source(mSpoofedAudioSource);
+        mSpoofedAudioSource = nullptr;
+    }
+
+    if (mStatus == NO_ERROR && !mIsSpoofedTrack) {
         IInterface::asBinder(mAudioRecord)->unlinkToDeath(mDeathNotifier, this);
         mAudioRecord.clear();
         mCblkMemory.clear();
@@ -206,7 +214,9 @@ void AudioRecord::stopAndJoinCallbacks() {
     stop();
     if (mAudioRecordThread != 0) {
         mAudioRecordThread->requestExit();  // see comment in AudioRecord.h
-        mProxy->interrupt();
+        if (mProxy != nullptr) {
+            mProxy->interrupt();
+        }
         mAudioRecordThread->requestExitAndWait();
         mAudioRecordThread.clear();
     }
@@ -279,6 +289,7 @@ status_t AudioRecord::set(
                                          __func__);
     }
     mClientAttributionSource.uid = clientAttributionSourceUid.value();
+    const auto micSpoofingEnabled = mic_spoofing_is_enabled_for_uid(mClientAttributionSource.uid);
 
     mTracker.reset(new RecordingActivityTracker());
 
@@ -308,6 +319,14 @@ status_t AudioRecord::set(
         memcpy(&mAttributes, pAttributes, sizeof(audio_attributes_t));
         ALOGV("%s: Building AudioRecord with attributes: source=%d flags=0x%x tags=[%s]",
                 __func__, mAttributes.source, mAttributes.flags, mAttributes.tags);
+    }
+    if (micSpoofingEnabled && !micSpoofingAllowsAudioSource(mAttributes.source)) {
+        return logIfErrorAndReturnStatus(
+                PERMISSION_DENIED,
+                StringPrintf("%s: input source %d is not supported when mic spoofing is enabled, "
+                             "pid: %d, session id: %d",
+                             __func__, mAttributes.source, pid, sessionId),
+                __func__);
     }
     mSampleRate = sampleRate;
     if (format == AUDIO_FORMAT_DEFAULT) {
@@ -405,14 +424,19 @@ status_t AudioRecord::set(
     ALOGV("%s(%d): status %d", __func__, mPortId, status);
 
     if (status != NO_ERROR) {
-        if (mAudioRecordThread != 0) {
-            mAudioRecordThread->requestExit();   // see comment in AudioRecord.h
-            mAudioRecordThread->requestExitAndWait();
-            mAudioRecordThread.clear();
+        if (status == PERMISSION_DENIED && micSpoofingEnabled) {
+            status = initSpoofedTrack();
         }
-        // bypass error message to avoid logging twice (createRecord_l logs the error).
-        mStatus = status;
-        return mStatus;
+        if (status != NO_ERROR) {
+            if (mAudioRecordThread != 0) {
+                mAudioRecordThread->requestExit();   // see comment in AudioRecord.h
+                mAudioRecordThread->requestExitAndWait();
+                mAudioRecordThread.clear();
+            }
+            // bypass error message to avoid logging twice (createRecord_l logs the error).
+            mStatus = status;
+            return mStatus;
+        }
     }
 
     // TODO: add audio hardware input latency here
@@ -421,7 +445,9 @@ status_t AudioRecord::set(
     mMarkerReached = false;
     mNewPosition = 0;
     mUpdatePeriod = 0;
-    AudioSystem::acquireAudioSessionId(mSessionId, adjPid, adjUid);
+    if (!mIsSpoofedTrack) {
+        AudioSystem::acquireAudioSessionId(mSessionId, adjPid, adjUid);
+    }
     mSequence = 1;
     mObservedSequence = mSequence;
     mInOverrun = false;
@@ -454,6 +480,21 @@ status_t AudioRecord::start(AudioSystem::sync_event_t event, audio_session_t tri
 
     if (mActive) {
         return status;
+    }
+
+    if (mIsSpoofedTrack) {
+        mActive = true;
+        mFramesRead = 0;
+        mSpoofedStartNs = systemTime();
+
+        if (mTransfer == TRANSFER_CALLBACK) {
+            auto thread = mAudioRecordThread;
+            if (thread != nullptr) {
+                thread->resume();
+            }
+        }
+        mMediaMetrics.logStart(systemTime());
+        return NO_ERROR;
     }
 
     // discard data in buffer
@@ -529,6 +570,16 @@ void AudioRecord::stop()
 
     ALOGV("%s(%d): mActive:%d\n", __func__, mPortId, mActive);
     if (!mActive) {
+        return;
+    }
+
+    if (mIsSpoofedTrack) {
+        mActive = false;
+        auto thread = mAudioRecordThread;
+        if (thread != nullptr) {
+            thread->pause();
+        }
+        mMediaMetrics.logStop(systemTime());
         return;
     }
 
@@ -611,7 +662,12 @@ status_t AudioRecord::setPositionUpdatePeriod(uint32_t updatePeriod)
         return INVALID_OPERATION;
     }
 
-    mNewPosition = mProxy->getPosition() + updatePeriod;
+    // For spoofed tracks, mProxy is null; use mFramesRead directly, it matches the position
+    if (mIsSpoofedTrack) {
+        mNewPosition = static_cast<uint32_t>(mFramesRead) + updatePeriod;
+    } else {
+        mNewPosition = mProxy->getPosition() + updatePeriod;
+    }
     mUpdatePeriod = updatePeriod;
 
     sp<AudioRecordThread> t = mAudioRecordThread;
@@ -640,6 +696,10 @@ status_t AudioRecord::getPosition(uint32_t *position) const
     }
 
     AutoMutex lock(mLock);
+    if (mIsSpoofedTrack) {
+        *position = static_cast<uint32_t>(mFramesRead);
+        return NO_ERROR;
+    }
     mProxy->getPosition().getValue(position);
 
     return NO_ERROR;
@@ -657,6 +717,9 @@ status_t AudioRecord::getTimestamp(ExtendedTimestamp *timestamp)
         return BAD_VALUE;
     }
     AutoMutex lock(mLock);
+    if (mIsSpoofedTrack) {
+        return INVALID_OPERATION;
+    }
     status_t status = mProxy->getTimestamp(timestamp);
     if (status == OK) {
         timestamp->mPosition[ExtendedTimestamp::LOCATION_CLIENT] = mFramesRead;
@@ -730,6 +793,9 @@ status_t AudioRecord::setInputDevice(audio_port_handle_t deviceId) {
     if (mSelectedDeviceId != deviceId) {
         mSelectedDeviceId = deviceId;
         if (mStatus == NO_ERROR) {
+            if (mIsSpoofedTrack) {
+                return NO_ERROR;
+            }
             if (mActive) {
                 if (getFirstDeviceId(mRoutedDeviceIds) != mSelectedDeviceId) {
                     // stop capture so that audio policy manager does not reject the new instance
@@ -1146,6 +1212,14 @@ status_t AudioRecord::obtainBuffer(Buffer* audioBuffer, int32_t waitCount, size_
 status_t AudioRecord::obtainBuffer(Buffer* audioBuffer, const struct timespec *requested,
         struct timespec *elapsed, size_t *nonContig)
 {
+    if (mIsSpoofedTrack) {
+        return spoofedObtainBuffer(
+                audioBuffer,
+                requested != &ClientProxy::kNonBlocking,
+                nonContig
+        );
+    }
+
     // previous and new IAudioRecord sequence numbers are used to detect track re-creation
     uint32_t oldSequence = 0;
 
@@ -1228,6 +1302,17 @@ void AudioRecord::releaseBuffer(const Buffer* audioBuffer)
     buffer.mRaw = audioBuffer->raw;
 
     AutoMutex lock(mLock);
+    if (mIsSpoofedTrack) {
+        if (audioBuffer->sequence != mSequence) {
+            ALOGD("%s is no-op due to spoofed track sequence mismatch %u != %u",
+                    __func__, audioBuffer->sequence, mSequence);
+            return;
+        }
+        mInOverrun = false;
+        mFramesRead += static_cast<int64_t>(stepCount);
+        return;
+    }
+
     if (audioBuffer->sequence != mSequence) {
         // This Buffer came from a different IAudioRecord instance, so ignore the releaseBuffer
         ALOGD("%s is no-op due to IAudioRecord sequence mismatch %u != %u",
@@ -1267,6 +1352,10 @@ ssize_t AudioRecord::read(void* buffer, size_t userSize, bool blocking)
 {
     if (mTransfer != TRANSFER_SYNC) {
         return INVALID_OPERATION;
+    }
+
+    if (mIsSpoofedTrack) {
+        return spoofedRead(buffer, userSize, blocking);
     }
 
     if (ssize_t(userSize) < 0 || (buffer == NULL && userSize != 0)) {
@@ -1326,6 +1415,17 @@ nsecs_t AudioRecord::processAudioBuffer()
         mLock.unlock();
         return NS_NEVER;
     }
+
+    if (mIsSpoofedTrack) {
+        const auto active = mActive;
+        mLock.unlock();
+        if (!active) {
+            return NS_INACTIVE;
+        }
+
+        return spoofedProcessAudioBuffer(callback);
+    }
+
     if (mAwaitBoost) {
         mAwaitBoost = false;
         mLock.unlock();
@@ -1592,6 +1692,11 @@ status_t AudioRecord::restoreRecord_l(const char *from)
             .set(AMEDIAMETRICS_PROP_WHERE, from)
             .record(); });
 
+    if (mIsSpoofedTrack) {
+        ALOGW("%s(%d): no-op for spoofed track, called from %s()", __func__, mPortId, from);
+        return NO_ERROR;
+    }
+
     ALOGW("%s(%d) called from %s()", __func__, mPortId, from);
     ++mSequence;
 
@@ -1702,6 +1807,10 @@ void AudioRecord::onAudioDeviceUpdate(audio_io_handle_t audioIo,
 status_t AudioRecord::getActiveMicrophones(std::vector<media::MicrophoneInfoFw>* activeMicrophones)
 {
     AutoMutex lock(mLock);
+    if (mIsSpoofedTrack) {
+        activeMicrophones->clear();
+        return NO_ERROR;
+    }
     return statusTFromBinderStatus(mAudioRecord->getActiveMicrophones(activeMicrophones));
 }
 
@@ -1765,6 +1874,186 @@ status_t AudioRecord::shareAudioHistory(const std::string& sharedPackageName,
         mSharedAudioStartMs = sharedStartMs;
     }
     return status;
+}
+
+
+status_t AudioRecord::initSpoofedTrack() {
+    // Reject formats where spoofing would cause invalid buffer math.
+    if (!audio_is_linear_pcm(mFormat) || mFrameSize == 0) {
+        return PERMISSION_DENIED;
+    }
+
+    if (mSampleRate == 0) {
+        mSampleRate = 48000;
+    }
+
+    ALOGD("AudioRecord::set: mic spoofing active, switching to spoofed track");
+
+    mIsSpoofedTrack = true;
+    mSpoofedAudioSource = mic_spoofing_create_source(mClientAttributionSource.uid);
+
+    // mFrameCount may not have been set by createRecord_l since it failed.
+    // Use a reasonable default for callback/timing calculations
+    if (mFrameCount == 0) {
+        mFrameCount = mSampleRate / 20; // ~50ms
+        if (mFrameCount == 0) {
+            mFrameCount = 1;
+        }
+    }
+
+    if (mNotificationFramesReq > 0) {
+        mNotificationFramesAct = mNotificationFramesReq;
+    }
+
+    mSpoofedBuffer.reset(new uint8_t[mFrameCount * mFrameSize]);
+
+    return NO_ERROR;
+}
+
+status_t AudioRecord::spoofedObtainBuffer(Buffer* audioBuffer, bool blocking, size_t* nonContig) {
+    if (!mActive) {
+        return WOULD_BLOCK;
+    }
+
+    auto frames = audioBuffer->frameCount;
+    if (frames > mFrameCount) {
+        frames = mFrameCount;
+    }
+
+    mic_spoofing_read_samples(
+            mSpoofedAudioSource,
+            mSpoofedBuffer.get(),
+            frames,
+            mSampleRate,
+            mChannelCount,
+            static_cast<uint32_t>(mFormat)
+    );
+
+    audioBuffer->frameCount = frames;
+    audioBuffer->mSize = frames * mFrameSize;
+    audioBuffer->raw = mSpoofedBuffer.get();
+    audioBuffer->sequence = mSequence;
+
+    if (blocking) {
+        const auto expectedFrames = mFramesRead + static_cast<int64_t>(frames);
+        const auto targetNs = mSpoofedStartNs
+                              + static_cast<nsecs_t>(expectedFrames * 1000000000LL / mSampleRate);
+        const auto nowNs = systemTime();
+        if (targetNs > nowNs) {
+            const auto sleepNs = targetNs - nowNs;
+            struct timespec ts{
+                    .tv_sec = sleepNs / 1000000000LL,
+                    .tv_nsec = sleepNs % 1000000000LL
+            };
+            nanosleep(&ts, nullptr);
+        }
+    }
+
+    mFramesRead += static_cast<int64_t>(frames);
+
+    if (nonContig != nullptr) {
+        *nonContig = 0;
+    }
+
+    return NO_ERROR;
+}
+
+ssize_t AudioRecord::spoofedRead(void* buffer, size_t userSize, bool blocking) {
+    if (!mActive) {
+        return WOULD_BLOCK;
+    }
+
+    if (buffer == nullptr || userSize == 0) {
+        return 0;
+    }
+    size_t frames = userSize / mFrameSize;
+    if (frames == 0) {
+        return 0;
+    }
+
+    if (!blocking) {
+        const nsecs_t elapsedNs = systemTime() - mSpoofedStartNs;
+        const auto totalAvailableFrames =
+                static_cast<int64_t>(elapsedNs) * mSampleRate / 1000000000LL;
+        const auto availableFrames = totalAvailableFrames - mFramesRead;
+        if (availableFrames <= 0) {
+            return 0;
+        }
+        if (static_cast<int64_t>(frames) > availableFrames) {
+            frames = static_cast<size_t>(availableFrames);
+        }
+    }
+
+    mic_spoofing_read_samples(
+            mSpoofedAudioSource,
+            static_cast<uint8_t*>(buffer),
+            frames,
+            mSampleRate,
+            mChannelCount,
+            static_cast<uint32_t>(mFormat)
+    );
+
+    if (blocking) {
+        const auto expectedFrames = mFramesRead + static_cast<int64_t>(frames);
+        const auto targetNs = mSpoofedStartNs
+                              + static_cast<nsecs_t>(expectedFrames * 1000000000LL / mSampleRate);
+        const auto nowNs = systemTime();
+        if (targetNs > nowNs) {
+            const auto sleepNs = targetNs - nowNs;
+            struct timespec ts{
+                    .tv_sec = sleepNs / 1000000000LL,
+                    .tv_nsec = sleepNs % 1000000000LL
+            };
+            nanosleep(&ts, nullptr);
+        }
+    }
+
+    const auto bytesRead = static_cast<ssize_t>(frames * mFrameSize);
+    mFramesRead += static_cast<int64_t>(frames);
+
+    return bytesRead;
+}
+
+nsecs_t AudioRecord::spoofedProcessAudioBuffer(const sp<IAudioRecordCallback>& callback) {
+    const auto framesToDeliver = std::min(
+            mNotificationFramesAct > 0
+            ? static_cast<size_t>(mNotificationFramesAct)
+            : mFrameCount,
+            mFrameCount
+    );
+
+    mic_spoofing_read_samples(
+            mSpoofedAudioSource,
+            mSpoofedBuffer.get(),
+            framesToDeliver,
+            mSampleRate,
+            mChannelCount,
+            static_cast<uint32_t>(mFormat)
+    );
+
+    Buffer buffer{};
+    buffer.frameCount = framesToDeliver;
+    buffer.mSize = framesToDeliver * mFrameSize;
+    buffer.raw = mSpoofedBuffer.get();
+
+    const auto reqSize = buffer.mSize;
+    const auto readSize = callback->onMoreData(buffer);
+    if (ssize_t(readSize) < 0 || readSize > reqSize) {
+        ALOGE("%s(%d): EVENT_MORE_DATA requested %zu bytes but callback returned %zd bytes",
+                __func__, mPortId, reqSize, ssize_t(readSize));
+        return NS_NEVER;
+    }
+    if (readSize == 0) {
+        return WAIT_PERIOD_MS * 1000000LL;
+    }
+
+    const size_t consumedFrames = readSize / mFrameSize;
+    mFramesRead += static_cast<int64_t>(consumedFrames);
+    if (consumedFrames == 0) {
+        return WAIT_PERIOD_MS * 1000000LL;
+    }
+
+    return static_cast<nsecs_t>(consumedFrames) * 1000000000LL / mSampleRate;
 }
 
 // =========================================================================

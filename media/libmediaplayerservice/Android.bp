@@ -71,6 +71,7 @@ cc_defaults {
         "libmediametrics",
         "libmediautils",
         "libmemunreachable",
+        "libmicspoofing",
         "libnetd_client",
         "libpowermanager",
         "libstagefright",

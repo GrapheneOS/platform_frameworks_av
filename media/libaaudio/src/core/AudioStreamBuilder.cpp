@@ -21,6 +21,7 @@
 #include <new>
 #include <numeric>
 #include <stdint.h>
+#include <unistd.h>
 #include <vector>
 
 #include <aaudio/AAudio.h>
@@ -29,6 +30,7 @@
 #include <android/media/audio/common/AudioMMapPolicyInfo.h>
 #include <android/media/audio/common/AudioMMapPolicyType.h>
 #include <media/AudioSystem.h>
+#include <mic_spoofing.h>
 #include <system/aaudio/AAudio.h>
 
 #include "binding/AAudioBinderClient.h"
@@ -194,6 +196,12 @@ aaudio_result_t AudioStreamBuilder::build(AudioStream** streamPtr) {
     if (getFormat() == AUDIO_FORMAT_IEC61937) {
         ALOGD("%s IEC61937 format is selected, do not allow MMAP in this case.", __func__);
         allowMMap = false;
+    }
+
+    if (getDirection() == AAUDIO_DIRECTION_INPUT && mic_spoofing_is_enabled_for_uid(getuid())) {
+        ALOGD("%s() MMAP not used because mic spoofing is active", __func__);
+        allowMMap = false;
+        allowLegacy = true;
     }
 
     if (!allowMMap && !allowLegacy) {

@@ -149,6 +149,7 @@ cc_library {
         "libmedia_helper",
         "libmediametrics",
         "libmediautils",
+        "libmicspoofing",
         "libnblog",
         "libprocessgroup",
         "libshmemcompat",

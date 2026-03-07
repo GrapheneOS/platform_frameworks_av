@@ -863,6 +863,19 @@ private:
     std::string mCallerName; // for example "aaudio"
 
     void reportError(status_t status, const char *event, const char *message) const;
+
+    bool mIsSpoofedTrack = false;
+    void *mSpoofedAudioSource = nullptr;
+    std::unique_ptr<uint8_t[]> mSpoofedBuffer;
+    nsecs_t mSpoofedStartNs = 0;
+
+    status_t initSpoofedTrack();
+
+    status_t spoofedObtainBuffer(Buffer *audioBuffer, bool blocking, size_t *nonContig);
+
+    ssize_t spoofedRead(void *buffer, size_t userSize, bool blocking);
+
+    nsecs_t spoofedProcessAudioBuffer(const sp <IAudioRecordCallback> &callback);
 };
 
 }; // namespace android

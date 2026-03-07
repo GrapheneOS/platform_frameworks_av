@@ -21,6 +21,7 @@
 #include "MediaRecorderClient.h"
 #include "MediaPlayerService.h"
 #include "StagefrightRecorder.h"
+#include <mic_spoofing.h>
 
 #include <android/binder_auto_utils.h>
 #include <android/hardware/media/omx/1.0/IOmx.h>
@@ -39,6 +40,7 @@
 #else
 #include <gui/IGraphicBufferProducer.h>
 #endif
+#include <mediautils/MicSpoofing.h>
 #include <mediautils/ServiceUtilities.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -127,6 +129,10 @@ status_t MediaRecorderClient::setAudioSource(int as)
         ALOGE("Invalid audio source: %d", as);
         return BAD_VALUE;
     }
+    const bool micSpoofingEnabled = mic_spoofing_is_enabled_for_uid(mAttributionSource.uid);
+    if (micSpoofingEnabled && !micSpoofingAllowsAudioSource(static_cast<audio_source_t>(as))) {
+        return PERMISSION_DENIED;
+    }
 
     if ((as == AUDIO_SOURCE_FM_TUNER
                 && !(captureAudioOutputAllowed(mAttributionSource)
@@ -136,7 +142,8 @@ status_t MediaRecorderClient::setAudioSource(int as)
                     || modifyAudioRoutingAllowed(mAttributionSource)))
             || (as == AUDIO_SOURCE_ECHO_REFERENCE
                 && !captureAudioOutputAllowed(mAttributionSource))
-            || !recordingAllowed(mAttributionSource, (audio_source_t)as)) {
+            || (!recordingAllowed(mAttributionSource, (audio_source_t)as)
+                && !micSpoofingEnabled)) {
         return PERMISSION_DENIED;
     }
     Mutex::Autolock lock(mLock);

@@ -177,6 +177,7 @@ cc_library {
         "libmedia_helper",
         "libmediametrics",
         "libmediautils",
+        "libmicspoofing",
         "libutils",
     ],
 
