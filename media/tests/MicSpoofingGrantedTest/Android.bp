@@ -1,0 +1,17 @@
+package {
+    default_applicable_licenses: ["frameworks_av_license"],
+}
+
+android_test {
+    name: "MicSpoofingGrantedTests",
+    srcs: ["src/**/*.java"],
+    static_libs: [
+        "androidx.test.ext.junit",
+        "androidx.test.runner",
+        "truth",
+    ],
+    data: ["//frameworks/av/media/libmicspoofing:mic_spoofing_test_audio_file"],
+    platform_apis: true,
+    certificate: "platform",
+    test_suites: ["device-tests"],
+}
