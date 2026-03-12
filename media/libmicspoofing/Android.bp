@@ -1,5 +1,11 @@
 rust_defaults {
+    name: "libmicspoofing_common_defaults",
+    edition: "2021",
+}
+
+rust_defaults {
     name: "libmicspoofing_defaults",
+    defaults: ["libmicspoofing_common_defaults"],
     crate_name: "micspoofing",
     srcs: ["rust/src/lib.rs"],
     rustlibs: [
@@ -12,7 +18,17 @@ rust_defaults {
         "liblog",
         "libnativehelper",
     ],
-    edition: "2021",
+}
+
+rust_defaults {
+    name: "libmicspoofing_decoder_defaults",
+    defaults: ["libmicspoofing_common_defaults"],
+    crate_name: "micspoofing_decoder",
+    srcs: ["rust/src/decoder_lib.rs"],
+    shared_libs: [
+        "liblog",
+        "libmediandk",
+    ],
 }
 
 rust_ffi {
@@ -29,6 +45,23 @@ rust_library {
 rust_test {
     name: "libmicspoofing_rs_test",
     defaults: ["libmicspoofing_defaults"],
+    test_suites: ["general-tests"],
+}
+
+rust_ffi {
+    name: "libmicspoofing_decoder",
+    defaults: ["libmicspoofing_decoder_defaults"],
+    export_include_dirs: ["include"],
+}
+
+rust_library {
+    name: "libmicspoofing_decoder_rust",
+    defaults: ["libmicspoofing_decoder_defaults"],
+}
+
+rust_test {
+    name: "libmicspoofing_decoder_rs_test",
+    defaults: ["libmicspoofing_decoder_defaults"],
     test_suites: ["general-tests"],
 }
 
