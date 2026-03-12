@@ -92,6 +92,7 @@ cc_test {
     shared_libs: [
         "libaaudio",
         "libmicspoofing",
+        "libmicspoofing_decoder",
         "liblog",
     ],
     cflags: [
@@ -109,6 +110,7 @@ cc_test {
     shared_libs: [
         "libOpenSLES",
         "libmicspoofing",
+        "libmicspoofing_decoder",
         "liblog",
     ],
     cflags: [

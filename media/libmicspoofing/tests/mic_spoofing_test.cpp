@@ -1,22 +1,97 @@
+#include <fcntl.h>
 #include <gtest/gtest.h>
 #include <mic_spoofing.h>
+#include <sys/mman.h>
 #include <system/audio.h>
+#include <unistd.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
 namespace {
 
 constexpr size_t kFrameCount = 4800;
+constexpr size_t kFactoryFrameCount = kFrameCount * 3;
 constexpr uint32_t kSampleRate = 48000;
 constexpr uint32_t kMono = 1;
 constexpr uint32_t kStereo = 2;
+constexpr float kTwoPi = 6.28318530717958647692f;
+
+int32_t currentUid() {
+    return static_cast<int32_t>(getuid());
+}
+
+std::vector<float> makeTestSamples() {
+    std::vector<float> samples(kFactoryFrameCount);
+    for (size_t i = 0; i < samples.size(); ++i) {
+        float phase = (static_cast<float>(i) * 440.0f * kTwoPi) / kSampleRate;
+        samples[i] = std::sin(phase) * 0.8f;
+    }
+    return samples;
+}
+
+int writeAll(int fd, const uint8_t *data, size_t size) {
+    size_t written = 0;
+    while (written < size) {
+        ssize_t result = TEMP_FAILURE_RETRY(write(fd, data + written, size - written));
+        if (result <= 0) {
+            return -1;
+        }
+        written += static_cast<size_t>(result);
+    }
+    return 0;
+}
+
+int testDecoderFactory(
+        int sourceFd,
+        uint32_t *outSampleRate,
+        uint32_t *outChannelCount
+) {
+    close(sourceFd);
+
+    if (outSampleRate == nullptr || outChannelCount == nullptr) {
+        return -1;
+    }
+
+    int fd = memfd_create("MicSpoofingTestDecoder", MFD_CLOEXEC);
+    if (fd < 0) {
+        return -1;
+    }
+
+    *outSampleRate = kSampleRate;
+    *outChannelCount = kMono;
+
+    const std::vector<float> samples = makeTestSamples();
+    const auto *bytes = reinterpret_cast<const uint8_t *>(samples.data());
+    const size_t size = samples.size() * sizeof(float);
+    if (writeAll(fd, bytes, size) != 0) {
+        close(fd);
+        return -1;
+    }
+
+    if (lseek(fd, 0, SEEK_SET) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    return fd;
+}
+
+void ensureDecoderFactoryRegistered() {
+    static const bool registered = []() {
+        mic_spoofing_set_decoder_factory(&testDecoderFactory);
+        return true;
+    }();
+    (void)registered;
+}
 
 class MicSpoofingSourceTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        source_ = mic_spoofing_create_source(0);
+        ensureDecoderFactoryRegistered();
+        source_ = mic_spoofing_create_source(currentUid());
         ASSERT_NE(source_, nullptr)
                 << "Failed to create source; ensure spoofed_mic_audio_default.wav is at /system/etc/";
     }
@@ -33,7 +108,8 @@ protected:
 
 
 TEST(MicSpoofing, CreateSource_ReturnsNonNull) {
-    void *source = mic_spoofing_create_source(0);
+    ensureDecoderFactoryRegistered();
+    void *source = mic_spoofing_create_source(currentUid());
     EXPECT_NE(source, nullptr);
     mic_spoofing_destroy_source(source);
 }
@@ -42,14 +118,57 @@ TEST(MicSpoofing, DestroyNullSource_NoOp) {
     mic_spoofing_destroy_source(nullptr);
 }
 
+TEST(MicSpoofing, StartStreamingDecoder_NullOutputs_ReturnsFailure) {
+    EXPECT_EQ(mic_spoofing_start_streaming_decoder(0, nullptr, nullptr), -1);
+}
+
+TEST(MicSpoofing, PendingSourceFd_ApiCallsAreSafe) {
+    int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    ASSERT_GE(fd, 0);
+
+    mic_spoofing_set_pending_source_fd(fd, kSampleRate, kMono);
+    mic_spoofing_clear_pending_source_fd();
+    mic_spoofing_clear_pending_source_fd();
+}
+
+TEST(MicSpoofing, StartStreamingDecoder_CurrentUid_ReturnsReadablePipe) {
+    ensureDecoderFactoryRegistered();
+    uint32_t sampleRate = 0;
+    uint32_t channelCount = 0;
+    int fd = mic_spoofing_start_streaming_decoder(currentUid(), &sampleRate, &channelCount);
+    ASSERT_GE(fd, 0);
+    EXPECT_GT(sampleRate, 0u);
+    EXPECT_GT(channelCount, 0u);
+
+    std::vector<float> buf(256, 0.0f);
+    ssize_t bytes = TEMP_FAILURE_RETRY(read(fd, buf.data(), buf.size() * sizeof(float)));
+    EXPECT_GT(bytes, 0);
+    EXPECT_TRUE(std::any_of(buf.begin(), buf.end(), [](float sample) { return sample != 0.0f; }));
+    close(fd);
+}
+
 TEST(MicSpoofing, CreateDestroyMultipleSources) {
-    void *s1 = mic_spoofing_create_source(0);
-    void *s2 = mic_spoofing_create_source(0);
+    ensureDecoderFactoryRegistered();
+    void *s1 = mic_spoofing_create_source(currentUid());
+    void *s2 = mic_spoofing_create_source(currentUid());
     ASSERT_NE(s1, nullptr);
     ASSERT_NE(s2, nullptr);
     EXPECT_NE(s1, s2) << "Each source should be a unique allocation";
     mic_spoofing_destroy_source(s1);
     mic_spoofing_destroy_source(s2);
+}
+
+TEST(MicSpoofing, CreateSource_ForeignUid_FillsSilence) {
+    void *source = mic_spoofing_create_source(currentUid() + 1);
+    ASSERT_NE(source, nullptr);
+
+    std::vector<int16_t> buf(kFrameCount, 1);
+    size_t frames = mic_spoofing_read_samples(
+            source, reinterpret_cast<uint8_t *>(buf.data()),
+            kFrameCount, kSampleRate, kMono, AUDIO_FORMAT_PCM_16_BIT);
+    EXPECT_EQ(frames, kFrameCount);
+    EXPECT_TRUE(std::all_of(buf.begin(), buf.end(), [](int16_t sample) { return sample == 0; }));
+    mic_spoofing_destroy_source(source);
 }
 
 TEST(MicSpoofing, ReadSamples_NullSource_FillsSilence) {
@@ -308,7 +427,7 @@ TEST_F(MicSpoofingSourceTest, ReadSamples_MisalignedBuffer_Pcm32Bit_FillsSilence
 }
 
 TEST_F(MicSpoofingSourceTest, ReadSamples_ExcessiveFrameCount_ReturnsZero) {
-    // The Rust FFI checks sample_count > MAX_WAV_SAMPLES (2,880,000) and returns 0
+    // The Rust FFI checks sample_count > MAX_READ_SAMPLES (2,880,000) and returns 0
     constexpr size_t kExcessiveFrames = 3000000;
     const size_t bufSize = kExcessiveFrames * kMono * sizeof(int16_t);
     std::vector<uint8_t> buf(bufSize, 0xAB);
@@ -318,7 +437,7 @@ TEST_F(MicSpoofingSourceTest, ReadSamples_ExcessiveFrameCount_ReturnsZero) {
     EXPECT_EQ(frames, 0u);
     // Buffer should remain untouched (sentinel 0xAB).
     EXPECT_TRUE(std::all_of(buf.begin(), buf.end(), [](uint8_t b) { return b == 0xAB; }))
-            << "Buffer should be untouched when frame count exceeds MAX_WAV_SAMPLES";
+            << "Buffer should be untouched when frame count exceeds MAX_READ_SAMPLES";
 }
 
 TEST_F(MicSpoofingSourceTest, ReadSamples_ChannelCountExceedsU16Max_ReturnsZero) {

@@ -2,6 +2,7 @@
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 #include <mic_spoofing.h>
+#include <mic_spoofing_decoder.h>
 
 #include <atomic>
 #include <chrono>
@@ -23,6 +24,14 @@ constexpr int32_t kBytesPerFrame = kNumChannels * (kBitsPerSample / 8);
 constexpr int32_t kBufferFrames = kSampleRate / 10;
 constexpr int32_t kBufferSizeBytes = kBufferFrames * kBytesPerFrame;
 constexpr int32_t kNumBuffers = 2;
+
+void ensureDecoderFactoryRegistered() {
+    static const bool registered = []() {
+        mic_spoofing_set_decoder_factory(&mic_spoofing_decoder_start);
+        return true;
+    }();
+    (void)registered;
+}
 
 struct RecordCallbackData {
     std::mutex mutex;
@@ -80,6 +89,7 @@ void bufferQueueCallback(SLAndroidSimpleBufferQueueItf bqItf, void *context) {
 class OpenSLESSpoofedTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        ensureDecoderFactoryRegistered();
         ASSERT_EQ(0, system("pm edit-gos-package-state com.android.shell 0"
                 " add-flag MIC_SPOOFING_ENABLED"))
                 << "Failed to enable mic spoofing for com.android.shell";

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <aaudio/AAudio.h>
 #include <mic_spoofing.h>
+#include <mic_spoofing_decoder.h>
 
 #include <algorithm>
 #include <atomic>
@@ -21,6 +22,13 @@ constexpr int64_t kReadTimeoutNanos = 2 * kNanosPerSecond;
 
 constexpr int32_t kDefaultSampleRate = 48000;
 constexpr int32_t kReadFrameCount = 4800;
+
+void ensureDecoderFactoryRegistered() {
+    static const bool registered = []() {
+        mic_spoofing_set_decoder_factory(&mic_spoofing_decoder_start);
+        return true;
+    }();
+}
 
 struct CallbackData {
     std::mutex mutex;
@@ -174,6 +182,7 @@ static bool readAndCheckNonSilent(AAudioStream *stream, int32_t framesToRead = k
 class AAudioSpoofedTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        ensureDecoderFactoryRegistered();
         ASSERT_EQ(0, system("pm edit-gos-package-state com.android.shell 0"
                 " add-flag MIC_SPOOFING_ENABLED"))
                 << "Failed to enable mic spoofing for com.android.shell";

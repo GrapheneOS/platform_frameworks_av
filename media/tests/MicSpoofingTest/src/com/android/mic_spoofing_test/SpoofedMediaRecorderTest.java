@@ -30,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 @RunWith(AndroidJUnit4.class)
 public class SpoofedMediaRecorderTest extends BaseMicSpoofingTest {
 
+    private static final String DEFAULT_SOURCE_FIXTURE_PATH = "/data/local/tmp/mic_spoofing_test.wav";
     private static final int RECORD_DURATION_MS = 2000;
     private static final int SAMPLE_RATE = 44100;
     private static final int CHANNELS = 1;
@@ -42,6 +43,7 @@ public class SpoofedMediaRecorderTest extends BaseMicSpoofingTest {
     public void setUp() throws Exception {
         context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         initPackageContext();
+        restoreCustomSourceFile();
 
         enableMicSpoofing();
     }
@@ -83,6 +85,22 @@ public class SpoofedMediaRecorderTest extends BaseMicSpoofingTest {
     private MediaRecorder createDefaultRecorder(File outputFile) {
         return createRecorder(outputFile, MediaRecorder.OutputFormat.THREE_GPP,
                 MediaRecorder.AudioEncoder.AAC, SAMPLE_RATE, CHANNELS, BIT_RATE);
+    }
+
+    private String customSourceShellPath() {
+        return "/data/media/" + userId + "/mic_spoofing_test.wav";
+    }
+
+    private void restoreCustomSourceFile() throws IOException {
+        runShellCommand("cp " + DEFAULT_SOURCE_FIXTURE_PATH + " " + customSourceShellPath());
+        runShellCommand("chmod 644 " + customSourceShellPath());
+        runShellCommand("restorecon " + customSourceShellPath());
+    }
+
+    private void corruptCustomSourceFile() throws IOException {
+        runShellCommand("printf 'not-a-valid-audio-file' > " + customSourceShellPath());
+        runShellCommand("chmod 644 " + customSourceShellPath());
+        runShellCommand("restorecon " + customSourceShellPath());
     }
 
     private static void recordForDuration(MediaRecorder recorder, int durationMs) throws Exception {
@@ -180,8 +198,8 @@ public class SpoofedMediaRecorderTest extends BaseMicSpoofingTest {
 
     @Test
     public void testMediaRecorder_spoofed_producesOutputFile() throws Exception {
-        var outputFile = createOutputFile(".3gp");
-        var recorder = createDefaultRecorder(outputFile);
+        File outputFile = createOutputFile(".3gp");
+        MediaRecorder recorder = createDefaultRecorder(outputFile);
         try {
             recordForDuration(recorder, RECORD_DURATION_MS);
 
@@ -196,8 +214,8 @@ public class SpoofedMediaRecorderTest extends BaseMicSpoofingTest {
 
     @Test
     public void testMediaRecorder_spoofed_outputContainsAudioTrack() throws Exception {
-        var outputFile = createOutputFile(".3gp");
-        var recorder = createDefaultRecorder(outputFile);
+        File outputFile = createOutputFile(".3gp");
+        MediaRecorder recorder = createDefaultRecorder(outputFile);
         try {
             recordForDuration(recorder, RECORD_DURATION_MS);
         } finally {
@@ -222,8 +240,8 @@ public class SpoofedMediaRecorderTest extends BaseMicSpoofingTest {
 
     @Test
     public void testMediaRecorder_spoofed_outputContainsNonSilentAudio() throws Exception {
-        var outputFile = createOutputFile(".3gp");
-        var recorder = createDefaultRecorder(outputFile);
+        File outputFile = createOutputFile(".3gp");
+        MediaRecorder recorder = createDefaultRecorder(outputFile);
         try {
             recordForDuration(recorder, RECORD_DURATION_MS);
         } finally {
@@ -231,6 +249,24 @@ public class SpoofedMediaRecorderTest extends BaseMicSpoofingTest {
         }
 
         assertWithMessage("Decoded spoofed audio should contain non-zero PCM samples")
+                .that(decodedAudioIsNonSilent(outputFile)).isTrue();
+    }
+
+    @Test
+    public void testMediaRecorder_spoofed_fallsBackToDefaultWhenCustomSourceDecodeFails()
+            throws Exception {
+        corruptCustomSourceFile();
+
+        var outputFile = createOutputFile(".3gp");
+        var recorder = createDefaultRecorder(outputFile);
+        try {
+            recordForDuration(recorder, RECORD_DURATION_MS);
+        } finally {
+            recorder.release();
+            restoreCustomSourceFile();
+        }
+
+        assertWithMessage("Recording should fall back to the default spoofed source")
                 .that(decodedAudioIsNonSilent(outputFile)).isTrue();
     }
 
