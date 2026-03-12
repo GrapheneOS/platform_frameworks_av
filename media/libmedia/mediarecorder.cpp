@@ -390,6 +390,25 @@ status_t MediaRecorder::setNextOutputFile(int fd)
     return ret;
 }
 
+status_t MediaRecorder::setMicSpoofingSourceFd(int fd, uint32_t sampleRate, uint32_t channelCount)
+{
+    ALOGV("setMicSpoofingSourceFd(%d, %u, %u)", fd, sampleRate, channelCount);
+    if (mMediaRecorder == nullptr) {
+        ALOGE("media recorder is not initialized yet");
+        return INVALID_OPERATION;
+    }
+    if (!(mCurrentState & MEDIA_RECORDER_PREPARED)) {
+        ALOGE("setMicSpoofingSourceFd called in an invalid state(%d)", mCurrentState);
+        return INVALID_OPERATION;
+    }
+
+    const status_t ret = mMediaRecorder->setMicSpoofingSourceFd(fd, sampleRate, channelCount);
+    if (OK != ret) {
+        ALOGE("setMicSpoofingSourceFd failed: %d", ret);
+    }
+    return ret;
+}
+
 status_t MediaRecorder::setVideoSize(int width, int height)
 {
     ALOGV("setVideoSize(%d, %d)", width, height);

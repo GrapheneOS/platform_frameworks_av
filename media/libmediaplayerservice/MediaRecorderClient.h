@@ -20,6 +20,7 @@
 
 #include "DeathNotifier.h"
 
+#include <android-base/unique_fd.h>
 #include <media/AudioSystem.h>
 #include <media/IMediaRecorder.h>
 #include <android/content/AttributionSourceState.h>
@@ -60,6 +61,8 @@ public:
     virtual     status_t   setAudioEncoder(int ae);
     virtual     status_t   setOutputFile(int fd);
     virtual     status_t   setNextOutputFile(int fd);
+    virtual     status_t   setMicSpoofingSourceFd(
+                              int fd, uint32_t sampleRate, uint32_t channelCount);
     virtual     status_t   setVideoSize(int width, int height);
     virtual     status_t   setVideoFrameRate(int frames_per_second);
     virtual     status_t   setParameters(const String8& params);
@@ -97,6 +100,7 @@ private:
                                    const sp<MediaPlayerService>& service,
                                    const content::AttributionSourceState& attributionSource);
     virtual                ~MediaRecorderClient();
+                void       clearSpoofedSourceState_l();
 
     std::vector<DeathNotifier> mDeathNotifiers;
     sp<AudioDeviceUpdatedNotifier> mAudioDeviceUpdatedNotifier;
@@ -105,6 +109,9 @@ private:
     mutable Mutex          mLock;
     MediaRecorderBase      *mRecorder;
     sp<MediaPlayerService> mMediaPlayerService;
+    base::unique_fd        mSpoofedSourceFd;
+    uint32_t               mSpoofedSourceSampleRate = 0;
+    uint32_t               mSpoofedSourceChannelCount = 0;
 };
 
 }; // namespace android
