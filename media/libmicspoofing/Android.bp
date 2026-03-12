@@ -10,7 +10,6 @@ rust_defaults {
     srcs: ["rust/src/lib.rs"],
     rustlibs: [
         "libbinder_rs",
-        "libhound",
         "libjni",
         "packagemanager_aidl-rust",
     ],

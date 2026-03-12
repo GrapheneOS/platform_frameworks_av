@@ -4,6 +4,10 @@
 use libfuzzer_sys::{arbitrary::Arbitrary, fuzz_target};
 use std::ffi::c_void;
 
+unsafe extern "C" {
+    fn getuid() -> u32;
+}
+
 // Native audio PCM sub-format values (must match system/audio-hal-enums.h)
 const AUDIO_FORMAT_PCM_16_BIT: u32 = 0x1;
 const AUDIO_FORMAT_PCM_8_BIT: u32 = 0x2;
@@ -99,13 +103,17 @@ fn cached_source() -> *mut c_void {
     unsafe impl Sync for Ptr {}
 
     static S: OnceLock<Ptr> = OnceLock::new();
-    S.get_or_init(|| Ptr(micspoofing::mic_spoofing_create_source(0))).0
+    // SAFETY: `getuid` is process-local and takes no arguments
+    let uid = unsafe { getuid() as i32 };
+    S.get_or_init(|| Ptr(micspoofing::mic_spoofing_create_source(uid))).0
 }
 
 fuzz_target!(|input: Input| {
     if input.test_lifecycle {
+        // SAFETY: `getuid` is process-local and takes no arguments
+        let uid = unsafe { getuid() as i32 };
         unsafe {
-            let s = micspoofing::mic_spoofing_create_source(0);
+            let s = micspoofing::mic_spoofing_create_source(uid);
             micspoofing::mic_spoofing_destroy_source(s);
             // Null destroy must be a no-op
             micspoofing::mic_spoofing_destroy_source(std::ptr::null_mut());
