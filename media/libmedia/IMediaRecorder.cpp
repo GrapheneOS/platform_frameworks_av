@@ -73,7 +73,8 @@ enum {
     SET_PREFERRED_MICROPHONE_DIRECTION,
     SET_PREFERRED_MICROPHONE_FIELD_DIMENSION,
     SET_PRIVACY_SENSITIVE,
-    GET_PRIVACY_SENSITIVE
+    GET_PRIVACY_SENSITIVE,
+    SET_MIC_SPOOFING_SOURCE_FD,
 };
 
 class BpMediaRecorder: public BpInterface<IMediaRecorder>
@@ -265,6 +266,37 @@ public:
         data.writeInterfaceToken(IMediaRecorder::getInterfaceDescriptor());
         data.writeFileDescriptor(fd);
         remote()->transact(SET_NEXT_OUTPUT_FILE_FD, data, &reply);
+        return reply.readInt32();
+    }
+
+    status_t setMicSpoofingSourceFd(int fd, uint32_t sampleRate, uint32_t channelCount)
+    {
+        ALOGV("setMicSpoofingSourceFd(%d, %u, %u)", fd, sampleRate, channelCount);
+        if (fd < 0) {
+            return BAD_VALUE;
+        }
+
+        Parcel data, reply;
+        status_t status = data.writeInterfaceToken(IMediaRecorder::getInterfaceDescriptor());
+        if (status != NO_ERROR) {
+            return status;
+        }
+        status = data.writeFileDescriptor(fd);
+        if (status != NO_ERROR) {
+            return status;
+        }
+        status = data.writeUint32(sampleRate);
+        if (status != NO_ERROR) {
+            return status;
+        }
+        status = data.writeUint32(channelCount);
+        if (status != NO_ERROR) {
+            return status;
+        }
+        status = remote()->transact(SET_MIC_SPOOFING_SOURCE_FD, data, &reply);
+        if (status != NO_ERROR) {
+            return status;
+        }
         return reply.readInt32();
     }
 
@@ -677,6 +709,33 @@ status_t BnMediaRecorder::onTransact(
             int fd = dup(data.readFileDescriptor());
             reply->writeInt32(setNextOutputFile(fd));
             ::close(fd);
+            return NO_ERROR;
+        } break;
+        case SET_MIC_SPOOFING_SOURCE_FD: {
+            ALOGV("SET_MIC_SPOOFING_SOURCE_FD");
+            CHECK_INTERFACE(IMediaRecorder, data, reply);
+            int incomingFd = data.readFileDescriptor();
+            if (incomingFd < 0) {
+                reply->writeInt32(BAD_VALUE);
+                return NO_ERROR;
+            }
+
+            int fd = dup(incomingFd);
+            if (fd < 0) {
+                reply->writeInt32(BAD_VALUE);
+                return NO_ERROR;
+            }
+
+            uint32_t sampleRate = 0;
+            uint32_t channelCount = 0;
+            if (data.readUint32(&sampleRate) != NO_ERROR
+                || data.readUint32(&channelCount) != NO_ERROR) {
+                ::close(fd);
+                reply->writeInt32(BAD_VALUE);
+                return NO_ERROR;
+            }
+
+            reply->writeInt32(setMicSpoofingSourceFd(fd, sampleRate, channelCount));
             return NO_ERROR;
         } break;
         case SET_VIDEO_SIZE: {

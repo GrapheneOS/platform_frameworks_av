@@ -18,6 +18,8 @@
 #ifndef ANDROID_MEDIARECORDER_H
 #define ANDROID_MEDIARECORDER_H
 
+#include <stdint.h>
+
 #include <utils/Log.h>
 #include <utils/threads.h>
 #include <utils/List.h>
@@ -250,6 +252,7 @@ public:
     status_t    setAudioEncoder(int ae);
     status_t    setOutputFile(int fd);
     status_t    setNextOutputFile(int fd);
+    status_t    setMicSpoofingSourceFd(int fd, uint32_t sampleRate, uint32_t channelCount);
     status_t    setVideoSize(int width, int height);
     status_t    setVideoFrameRate(int frames_per_second);
     status_t    setParameters(const String8& params);

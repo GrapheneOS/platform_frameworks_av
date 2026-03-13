@@ -21,6 +21,7 @@
 #include "MediaRecorderClient.h"
 #include "MediaPlayerService.h"
 #include "StagefrightRecorder.h"
+#include <mic_spoofing.h>
 
 #include <android/binder_auto_utils.h>
 #include <android/hardware/media/omx/1.0/IOmx.h>
@@ -39,6 +40,7 @@
 #else
 #include <gui/IGraphicBufferProducer.h>
 #endif
+#include <mediautils/MicSpoofing.h>
 #include <mediautils/ServiceUtilities.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -46,8 +48,9 @@
 #include <utils/String16.h>
 
 #include <dirent.h>
-#include <unistd.h>
 #include <string.h>
+#include <unistd.h>
+#include <utility>
 
 namespace android {
 
@@ -58,6 +61,12 @@ static bool checkPermission(const char* permissionString) {
     bool ok = checkCallingPermission(String16(permissionString));
     if (!ok) ALOGE("Request requires %s", permissionString);
     return ok;
+}
+
+void MediaRecorderClient::clearSpoofedSourceState_l() {
+    mSpoofedSourceFd.reset();
+    mSpoofedSourceSampleRate = 0;
+    mSpoofedSourceChannelCount = 0;
 }
 
 status_t MediaRecorderClient::setInputSurface(const sp<PersistentSurface>& surface)
@@ -127,6 +136,10 @@ status_t MediaRecorderClient::setAudioSource(int as)
         ALOGE("Invalid audio source: %d", as);
         return BAD_VALUE;
     }
+    const bool micSpoofingEnabled = mic_spoofing_is_enabled_for_uid(mAttributionSource.uid);
+    if (micSpoofingEnabled && !micSpoofingAllowsAudioSource(static_cast<audio_source_t>(as))) {
+        return PERMISSION_DENIED;
+    }
 
     if ((as == AUDIO_SOURCE_FM_TUNER
                 && !(captureAudioOutputAllowed(mAttributionSource)
@@ -136,7 +149,8 @@ status_t MediaRecorderClient::setAudioSource(int as)
                     || modifyAudioRoutingAllowed(mAttributionSource)))
             || (as == AUDIO_SOURCE_ECHO_REFERENCE
                 && !captureAudioOutputAllowed(mAttributionSource))
-            || !recordingAllowed(mAttributionSource, (audio_source_t)as)) {
+            || (!recordingAllowed(mAttributionSource, (audio_source_t)as)
+                && !micSpoofingEnabled)) {
         return PERMISSION_DENIED;
     }
     Mutex::Autolock lock(mLock);
@@ -225,6 +239,34 @@ status_t MediaRecorderClient::setNextOutputFile(int fd)
     return mRecorder->setNextOutputFile(fd);
 }
 
+status_t MediaRecorderClient::setMicSpoofingSourceFd(
+        int fd,
+        uint32_t sampleRate,
+        uint32_t channelCount
+) {
+    ALOGV("setMicSpoofingSourceFd(%d, %u, %u)", fd, sampleRate, channelCount);
+
+    base::unique_fd ownedFd(fd);
+    Mutex::Autolock lock(mLock);
+    clearSpoofedSourceState_l();
+
+    if (mRecorder == nullptr) {
+        ALOGE("recorder is not initialized");
+        return NO_INIT;
+    }
+
+    if (ownedFd.get() < 0 || sampleRate == 0 || channelCount == 0) {
+        ALOGE("invalid spoofed source fd=%d sampleRate=%u channelCount=%u",
+                fd, sampleRate, channelCount);
+        return BAD_VALUE;
+    }
+
+    mSpoofedSourceFd = std::move(ownedFd);
+    mSpoofedSourceSampleRate = sampleRate;
+    mSpoofedSourceChannelCount = channelCount;
+    return OK;
+}
+
 status_t MediaRecorderClient::setVideoSize(int width, int height)
 {
     ALOGV("setVideoSize(%dx%d)", width, height);
@@ -299,8 +341,20 @@ status_t MediaRecorderClient::start()
         ALOGE("recorder is not initialized");
         return NO_INIT;
     }
-    return mRecorder->start();
 
+    if (mSpoofedSourceFd.get() >= 0) {
+        mic_spoofing_set_pending_source_fd(
+                mSpoofedSourceFd.release(),
+                mSpoofedSourceSampleRate,
+                mSpoofedSourceChannelCount
+        );
+    }
+
+    const status_t status = mRecorder->start();
+    mic_spoofing_clear_pending_source_fd();
+    clearSpoofedSourceState_l();
+
+    return status;
 }
 
 status_t MediaRecorderClient::stop()
@@ -352,6 +406,7 @@ status_t MediaRecorderClient::close()
 {
     ALOGV("close");
     Mutex::Autolock lock(mLock);
+    clearSpoofedSourceState_l();
     if (mRecorder == NULL) {
         ALOGE("recorder is not initialized");
         return NO_INIT;
@@ -364,6 +419,9 @@ status_t MediaRecorderClient::reset()
 {
     ALOGV("reset");
     Mutex::Autolock lock(mLock);
+
+    clearSpoofedSourceState_l();
+
     if (mRecorder == NULL) {
         ALOGE("recorder is not initialized");
         return NO_INIT;
@@ -375,6 +433,9 @@ status_t MediaRecorderClient::release()
 {
     ALOGV("release");
     Mutex::Autolock lock(mLock);
+
+    clearSpoofedSourceState_l();
+
     if (mRecorder != NULL) {
         delete mRecorder;
         mRecorder = NULL;

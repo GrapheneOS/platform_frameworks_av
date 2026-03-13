@@ -1,0 +1,145 @@
+rust_defaults {
+    name: "libmicspoofing_common_defaults",
+    edition: "2021",
+}
+
+rust_defaults {
+    name: "libmicspoofing_defaults",
+    defaults: ["libmicspoofing_common_defaults"],
+    crate_name: "micspoofing",
+    srcs: ["rust/src/lib.rs"],
+    rustlibs: [
+        "libbinder_rs",
+        "libjni",
+        "packagemanager_aidl-rust",
+    ],
+    shared_libs: [
+        "liblog",
+        "libnativehelper",
+    ],
+}
+
+rust_defaults {
+    name: "libmicspoofing_decoder_defaults",
+    defaults: ["libmicspoofing_common_defaults"],
+    crate_name: "micspoofing_decoder",
+    srcs: ["rust/src/decoder_lib.rs"],
+    shared_libs: [
+        "liblog",
+        "libmediandk",
+    ],
+}
+
+rust_ffi {
+    name: "libmicspoofing",
+    defaults: ["libmicspoofing_defaults"],
+    export_include_dirs: ["include"],
+}
+
+rust_library {
+    name: "libmicspoofing_rust",
+    defaults: ["libmicspoofing_defaults"],
+}
+
+rust_test {
+    name: "libmicspoofing_rs_test",
+    defaults: ["libmicspoofing_defaults"],
+    test_suites: ["general-tests"],
+}
+
+rust_ffi {
+    name: "libmicspoofing_decoder",
+    defaults: ["libmicspoofing_decoder_defaults"],
+    export_include_dirs: ["include"],
+}
+
+rust_library {
+    name: "libmicspoofing_decoder_rust",
+    defaults: ["libmicspoofing_decoder_defaults"],
+}
+
+rust_test {
+    name: "libmicspoofing_decoder_rs_test",
+    defaults: ["libmicspoofing_decoder_defaults"],
+    test_suites: ["general-tests"],
+}
+
+filegroup {
+    name: "mic_spoofing_test_audio_file",
+    srcs: ["tests/data/spoofed_mic_audio_test.wav"],
+}
+
+cc_test {
+    name: "mic_spoofing_tests",
+    srcs: ["tests/mic_spoofing_test.cpp"],
+    header_libs: ["libaudio_system_headers"],
+    shared_libs: [
+        "libmicspoofing",
+        "liblog",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+    data: [":mic_spoofing_test_audio_file"],
+    test_config_template: "tests/mic_spoofing_test_template.xml",
+    test_suites: ["general-tests"],
+}
+
+cc_test {
+    name: "aaudio_spoofed_test",
+    srcs: ["tests/aaudio_spoofed_test.cpp"],
+    shared_libs: [
+        "libaaudio",
+        "libmicspoofing",
+        "libmicspoofing_decoder",
+        "liblog",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+    data: [":mic_spoofing_test_audio_file"],
+    test_config_template: "tests/mic_spoofing_test_template.xml",
+    test_suites: ["general-tests"],
+}
+
+cc_test {
+    name: "opensles_spoofed_test",
+    srcs: ["tests/opensles_spoofed_test.cpp"],
+    shared_libs: [
+        "libOpenSLES",
+        "libmicspoofing",
+        "libmicspoofing_decoder",
+        "liblog",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+    data: [":mic_spoofing_test_audio_file"],
+    test_config_template: "tests/mic_spoofing_test_template.xml",
+    test_suites: ["general-tests"],
+}
+
+rust_fuzz {
+    name: "mic_spoofing_fuzzer",
+    srcs: ["fuzz/mic_spoofing_fuzzer.rs"],
+    rustlibs: [
+        "libarbitrary",
+        "libmicspoofing_rust",
+    ],
+    shared_libs: [
+        "liblog",
+    ],
+    fuzz_config: {
+        fuzz_on_haiku_device: true,
+        fuzz_on_haiku_host: false,
+    },
+}
+
+prebuilt_etc {
+    name: "spoofed_mic_audio_default",
+    src: "data/spoofed_mic_audio_default.wav",
+    filename: "spoofed_mic_audio_default.wav",
+}
