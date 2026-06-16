@@ -64,9 +64,6 @@ cc_library {
     name: "libcom.android.media.swcodec.apexcodecs",
     defaults: [
         "libcom.android.media.swcodec.apexcodecs-defaults",
-        // Temporarily disable bti-report flag until GNU Note
-        // is added properly to libopus_lfi
-        "no_bti",
     ],
 
     visibility: [
@@ -114,25 +111,6 @@ cc_library {
         ],
         default: [],
     }),
-
-    arch: {
-        arm64: {
-            lfi_supported: true,
-            static_libs: select(release_flag("RELEASE_APEX_CODECS"), {
-                true: [
-                    "liblfi",
-                    "libopus_lfi",
-                ],
-                default: [],
-            }),
-            srcs: select(release_flag("RELEASE_APEX_CODECS"), {
-                true: [
-                    "C2ApexOpusDec.cpp",
-                ],
-                default: [],
-            }),
-        },
-    },
 
     min_sdk_version: "apex_inherit",
     version_script: "libcom.android.media.swcodec.apexcodecs.map.txt",

@@ -31,11 +31,6 @@
 #include <android/api-level.h>
 #include <util/C2InterfaceHelper.h>
 #include "C2ApexAacDec.h"
-
-#ifdef __aarch64__
-#include "C2ApexOpusDec.h"
-#endif
-
 #endif
 
 namespace android::apexcodecs {
@@ -107,16 +102,7 @@ private:
 
     static std::map<std::string, ComponentDesc> BuildCodecs() {
         std::map<std::string, ComponentDesc> codecs;
-#ifdef __aarch64__
-        if (android::media::swcodec::flags::opus_inproc_software_decoder()) {
-            static bool sIs64bitOnly = []() {
-                return ::android::base::GetProperty("ro.product.cpu.abilist32", "").empty();
-            }();
-            if (GetApiLevel() >= 37 && sIs64bitOnly ) {
-                AddCodec<C2ApexOpusDec>(&codecs);
-            }
-        }
-#endif
+
         if (android::media::swcodec::flags::rust_aac_software_decoder()) {
             if (GetApiLevel() >= 37) {
                 AddCodec<C2ApexAacDec>(&codecs);
