@@ -49,10 +49,10 @@ std::array<char const*, 5> const& getXmlPaths() {
         []() -> decltype(paths) {
             // Directories for XML file that will be searched (in this order).
             constexpr std::array<char const*, 4> searchDirs = {
-                "product/etc/",
-                "odm/etc/",
-                "vendor/etc/",
-                "system/etc/",
+                "/product/etc/",
+                "/odm/etc/",
+                "/vendor/etc/",
+                "/system/etc/",
             };
 
             // The file name may contain a variant if the vendor property
@@ -69,7 +69,7 @@ std::array<char const*, 5> const& getXmlPaths() {
                      searchDirs[1] + fileName,
                      searchDirs[2] + fileName,
                      searchDirs[3] + fileName,
-                     "system/etc/media_profiles.xml" // System fallback
+                     "/system/etc/media_profiles.xml" // System fallback
                    };
         }();
     static std::array<char const*, 5> const cPaths = {
