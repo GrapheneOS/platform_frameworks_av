@@ -960,6 +960,28 @@ void C2SoftApvDec::process(const std::unique_ptr<C2Work>& work,
             return;
         }
 
+        for (int i = 0; i < aui.num_frms; i++) {
+            oapv_frm_info_t* finfo = &aui.frm_info[i];
+            if (finfo->profile_idc != OAPV_PROFILE_422_10 &&
+                finfo->profile_idc != OAPV_PROFILE_422_12) {
+                ALOGE("Unsupported profile %d", finfo->profile_idc);
+                work->result = C2_CORRUPTED;
+                return;
+            }
+            if (finfo->w > MAX_SUPPORTED_WIDTH || finfo->h > MAX_SUPPORTED_HEIGHT) {
+                ALOGE("Stream resolution of %dx%d is not supported.", finfo->w, finfo->h);
+                work->result = C2_CORRUPTED;
+                return;
+            }
+            if (i > 0 && (finfo->w != aui.frm_info[0].w || finfo->h != aui.frm_info[0].h)) {
+                ALOGE("Stream with multiple frames of different dimensions is not supported "
+                      "(%dx%d vs %dx%d).",
+                      finfo->w, finfo->h, aui.frm_info[0].w, aui.frm_info[0].h);
+                work->result = C2_CORRUPTED;
+                return;
+            }
+        }
+
         /* create decoding frame buffers */
         mOutFrames.num_frms = aui.num_frms;
         if (mOutFrames.num_frms <= 0) {
@@ -972,16 +994,12 @@ void C2SoftApvDec::process(const std::unique_ptr<C2Work>& work,
             oapv_frm_info_t* finfo = &aui.frm_info[i];
             oapv_frm_t* frm = &mOutFrames.frm[i];
 
-            if (mWidth != finfo->w || mHeight != finfo->h) {
-                mWidth = finfo->w;
-                mHeight = finfo->h;
-                reportResolutionChange = true;
-            }
-
-            if (mWidth > MAX_SUPPORTED_WIDTH || mHeight > MAX_SUPPORTED_HEIGHT) {
-                ALOGE("Stream resolution of %dx%d is not supported.", mWidth, mHeight);
-                work->result = C2_CORRUPTED;
-                return;
+            if (finfo->pbu_type == OAPV_PBU_TYPE_PRIMARY_FRAME && !reportResolutionChange) {
+                if (mWidth != finfo->w || mHeight != finfo->h) {
+                    mWidth = finfo->w;
+                    mHeight = finfo->h;
+                    reportResolutionChange = true;
+                }
             }
 
             if (frm->imgb != NULL && (frm->imgb->w[0] != finfo->w || frm->imgb->h[0] != finfo->h)) {
@@ -1332,6 +1350,22 @@ status_t C2SoftApvDec::outputBuffer(const std::shared_ptr<C2BlockPool>& pool,
     ALOGV("mHalPixelFormat: %u, format: %d", mHalPixelFormat, format);
 
     C2MemoryUsage usage = {C2MemoryUsage::CPU_READ, C2MemoryUsage::CPU_WRITE};
+
+    uint32_t outWidth = imgbOutput->w[0];
+    uint32_t outHeight = imgbOutput->h[0];
+    if (outWidth == 0 || outWidth > MAX_SUPPORTED_WIDTH || outHeight == 0 ||
+        outHeight > MAX_SUPPORTED_HEIGHT) {
+        ALOGE("Primary-frame imgb dimensions invalid: %ux%u", outWidth, outHeight);
+        work->result = C2_CORRUPTED;
+        return UNKNOWN_ERROR;
+    }
+
+    if (outWidth != mWidth || outHeight != mHeight) {
+        ALOGW("Output dimensions mismatch: imgb(%ux%u) vs mWidth/mHeight(%ux%u)", outWidth,
+              outHeight, mWidth, mHeight);
+        mWidth = outWidth;
+        mHeight = outHeight;
+    }
 
     // check. align height to 2 times does not work.
     c2_status_t err =
